@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1e3a5f">
+  <title>Presenze Cantiere</title>
+
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- jsPDF + AutoTable (CDN) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+
+  <style>
+    body { -webkit-tap-highlight-color: transparent; }
+    .cell-input { width: 100%; background: transparent; padding: 4px 6px; border-radius: 4px; }
+    .cell-input:focus { outline: 2px solid #3b82f6; background: #fff; }
+    .spinner { border: 3px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%;
+               width: 18px; height: 18px; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+
+<body class="bg-slate-100 min-h-screen text-slate-800">
+
+  <!-- ===== INTESTAZIONE ===== -->
+  <header class="bg-[#1e3a5f] text-white px-4 py-4 shadow">
+    <h1 class="text-xl font-bold">📋 Presenze Cantiere</h1>
+    <p class="text-sm text-blue-100">Foto del foglio → dati estratti con IA → PDF per l'ufficio</p>
+  </header>
+
+  <main class="max-w-2xl mx-auto p-4 space-y-4 pb-24">
+
+    <!-- ===== 1. IMPOSTAZIONI (API KEY + MODELLO) ===== -->
+    <section class="bg-white rounded-xl shadow p-4 space-y-3">
+      <h2 class="font-semibold text-lg">1. Chiave API Gemini</h2>
+      <div class="flex gap-2">
+        <input id="apiKey" type="password" autocomplete="off" placeholder="Incolla qui la tua API Key"
+               class="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+        <button id="toggleKey" class="border border-slate-300 rounded-lg px-3 text-sm">👁</button>
+      </div>
+      <label class="flex items-center gap-2 text-sm text-slate-600">
+        <input id="rememberKey" type="checkbox" class="w-4 h-4" checked>
+        Ricorda la chiave su questo telefono
+      </label>
+      <details class="text-sm">
+        <summary class="cursor-pointer text-slate-500">Opzioni avanzate</summary>
+        <label class="block mt-2 text-slate-600">Modello Gemini</label>
+        <input id="model" type="text" value="gemini-flash-latest"
+               class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mt-1">
+        <p class="text-xs text-slate-400 mt-1">
+          "gemini-flash-latest" punta sempre all'ultimo modello Flash. Puoi indicarne uno specifico
+          (es. gemini-3.6-flash) se preferisci.
+        </p>
+      </details>
+      <p class="text-xs text-slate-400">
+        La chiave si crea gratis su <span class="font-medium">aistudio.google.com</span> → "Get API key".
+      </p>
+    </section>
+
+    <!-- ===== 2. DATI DEL CANTIERE (per l'intestazione del PDF) ===== -->
+    <section class="bg-white rounded-xl shadow p-4 space-y-3">
+      <h2 class="font-semibold text-lg">2. Dati cantiere</h2>
+      <input id="cantiere" type="text" placeholder="Nome / indirizzo cantiere"
+             class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+      <input id="impresa" type="text" placeholder="Impresa (facoltativo)"
+             class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+    </section>
+
+    <!-- ===== 3. FOTO DEL FOGLIO ===== -->
+    <section class="bg-white rounded-xl shadow p-4 space-y-3">
+      <h2 class="font-semibold text-lg">3. Foto del foglio presenze</h2>
+
+      <!-- capture="environment" apre direttamente la fotocamera posteriore -->
+      <label class="block">
+        <span class="w-full flex items-center justify-center gap-2 bg-[#1e3a5f] text-white rounded-lg py-3 font-medium cursor-pointer active:scale-[.98] transition">
+          📷 Scatta foto
+        </span>
+        <input id="photoCamera" type="file" accept="image/*" capture="environment" class="hidden">
+      </label>
+      <label class="block">
+        <span class="w-full flex items-center justify-center gap-2 border border-[#1e3a5f] text-[#1e3a5f] rounded-lg py-3 font-medium cursor-pointer">
+          🖼 Scegli dalla galleria
+        </span>
+        <input id="photoGallery" type="file" accept="image/*" class="hidden">
+      </label>
+
+      <!-- Anteprima immagine -->
+      <div id="previewBox" class="hidden">
+        <img id="preview" alt="Anteprima foglio" class="w-full rounded-lg border border-slate-200 max-h-96 object-contain bg-slate-50">
+      </div>
+
+      <button id="btnExtract" disabled
+              class="w-full flex items-center justify-center gap-2 bg-emerald-600 disabled:bg-slate-300 text-white rounded-lg py-3 font-semibold">
+        🤖 Estrai dati con IA
+      </button>
+
+      <div id="status" class="text-sm hidden rounded-lg p-3"></div>
+    </section>
+
+    <!-- ===== 4. TABELLA DATI (modificabile prima del PDF) ===== -->
+    <section id="resultSection" class="bg-white rounded-xl shadow p-4 space-y-3 hidden">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-lg">4. Controlla i dati</h2>
+        <button id="btnAddRow" class="text-sm text-blue-700 font-medium">+ Riga</button>
+      </div>
+      <p class="text-xs text-slate-500">
+        La scrittura a mano può trarre in inganno l'IA: tocca una cella per correggerla.
+        Le ore totali si ricalcolano da sole se modifichi arrivo/partenza.
+      </p>
+
+      <div class="overflow-x-auto -mx-4 px-4">
+        <table class="min-w-[640px] w-full text-sm">
+          <thead>
+            <tr class="bg-slate-100 text-left text-slate-600">
+              <th class="p-2">Data</th>
+              <th class="p-2">Lavoratore</th>
+              <th class="p-2">Mansione</th>
+              <th class="p-2">Arrivo</th>
+              <th class="p-2">Partenza</th>
+              <th class="p-2">Ore</th>
+              <th class="p-2"></th>
+            </tr>
+          </thead>
+          <tbody id="tableBody"></tbody>
+          <tfoot>
+            <tr class="font-bold border-t-2 border-slate-300">
+              <td class="p-2" colspan="5">TOTALE ORE</td>
+              <td class="p-2" id="totalCell">0</td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <label class="block text-sm text-slate-600">Note (facoltative)</label>
+      <textarea id="note" rows="2" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"></textarea>
+
+      <button id="btnPdf"
+              class="w-full bg-red-600 text-white rounded-lg py-3 font-semibold">
+        📄 Scarica PDF
+      </button>
+      <button id="btnShare"
+              class="w-full border border-red-600 text-red-600 rounded-lg py-3 font-semibold hidden">
+        📤 Condividi PDF (WhatsApp, email…)
+      </button>
+    </section>
+  </main>
+
+<script>
+/* =========================================================
+   STATO DELL'APP
+   ========================================================= */
+let imageBase64 = null;   // immagine compressa, senza prefisso "data:"
+let imageMime   = 'image/jpeg';
+let rows        = [];     // righe estratte: {data, nome, mansione, arrivo, partenza, ore}
+
+const $ = id => document.getElementById(id);
+
+/* =========================================================
+   API KEY: salvataggio locale (facoltativo)
+   localStorage può non essere disponibile (es. file aperto
+   in modalità privata), quindi ogni accesso è protetto.
+   ========================================================= */
+const KEY_STORAGE = 'presenze_gemini_key';
+try {
+  const saved = localStorage.getItem(KEY_STORAGE);
+  if (saved) $('apiKey').value = saved;
+  const savedCantiere = localStorage.getItem('presenze_cantiere');
+  if (savedCantiere) $('cantiere').value = savedCantiere;
+  const savedImpresa = localStorage.getItem('presenze_impresa');
+  if (savedImpresa) $('impresa').value = savedImpresa;
+} catch (e) {}
+
+function saveSettings() {
+  try {
+    if ($('rememberKey').checked) localStorage.setItem(KEY_STORAGE, $('apiKey').value.trim());
+    else localStorage.removeItem(KEY_STORAGE);
+    localStorage.setItem('presenze_cantiere', $('cantiere').value);
+    localStorage.setItem('presenze_impresa', $('impresa').value);
+  } catch (e) {}
+}
+
+$('toggleKey').onclick = () => {
+  $('apiKey').type = $('apiKey').type === 'password' ? 'text' : 'password';
+};
+
+/* =========================================================
+   MESSAGGI DI STATO
+   ========================================================= */
+function showStatus(msg, type = 'info') {
+  const el = $('status');
+  const styles = {
+    info:  'bg-blue-50 text-blue-800',
+    ok:    'bg-emerald-50 text-emerald-800',
+    error: 'bg-red-50 text-red-800'
+  };
+  el.className = 'text-sm rounded-lg p-3 ' + styles[type];
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+/* =========================================================
+   CARICAMENTO FOTO + ANTEPRIMA + COMPRESSIONE
+   Le foto dei telefoni pesano 3-8 MB: le ridimensiono a
+   max 2000 px per lato, così l'invio è rapido ma la
+   scrittura resta leggibile per l'IA.
+   ========================================================= */
+function handleFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 2000;
+      let { width, height } = img;
+      if (width > MAX || height > MAX) {
+        const scale = MAX / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+
+      $('preview').src = dataUrl;
+      $('previewBox').classList.remove('hidden');
+      imageBase64 = dataUrl.split(',')[1];
+      imageMime = 'image/jpeg';
+      $('btnExtract').disabled = false;
+      $('status').classList.add('hidden');
+    };
+    img.onerror = () => showStatus('Formato immagine non supportato. Prova a scattare di nuovo.', 'error');
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+$('photoCamera').onchange  = e => handleFile(e.target.files[0]);
+$('photoGallery').onchange = e => handleFile(e.target.files[0]);
+
+/* =========================================================
+   CHIAMATA A GEMINI
+   Uso l'output strutturato (responseSchema) così la
+   risposta è sempre un JSON valido con i campi richiesti.
+   ========================================================= */
+const PROMPT = `Sei un assistente che legge fogli presenze di cantiere edile scritti a mano, in italiano.
+Analizza la foto ed estrai UNA riga per ogni lavoratore presente (e per ogni giorno, se il foglio copre più giorni).
+Per ogni riga restituisci:
+- data: formato GG/MM/AAAA (se manca l'anno usa ${new Date().getFullYear()}; se la data è unica in testa al foglio, ripetila su ogni riga)
+- nome: nome e cognome del lavoratore, come scritto
+- mansione: es. muratore, manovale, carpentiere, elettricista (stringa vuota se assente)
+- arrivo: orario di arrivo in formato HH:MM 24h
+- partenza: orario di partenza in formato HH:MM 24h
+- ore: ore totali lavorate come numero decimale (es. 7.5). Se è scritto sul foglio usa quel valore, altrimenti calcolalo da arrivo e partenza.
+Se un dato è illeggibile lascia la stringa vuota invece di inventarlo. Ignora firme e scarabocchi.`;
+
+const SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    righe: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          data:     { type: 'STRING' },
+          nome:     { type: 'STRING' },
+          mansione: { type: 'STRING' },
+          arrivo:   { type: 'STRING' },
+          partenza: { type: 'STRING' },
+          ore:      { type: 'NUMBER' }
+        },
+        required: ['data', 'nome', 'mansione', 'arrivo', 'partenza', 'ore']
+      }
+    }
+  },
+  required: ['righe']
+};
+
+async function extractWithGemini() {
+  const apiKey = $('apiKey').value.trim();
+  const model  = $('model').value.trim() || 'gemini-flash-latest';
+  if (!apiKey) { showStatus('Inserisci prima la chiave API di Gemini.', 'error'); return; }
+  if (!imageBase64) { showStatus('Scatta o carica prima una foto.', 'error'); return; }
+  saveSettings();
+
+  const btn = $('btnExtract');
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner"></div> Lettura in corso…';
+  showStatus("L'IA sta leggendo il foglio, di solito servono 5-20 secondi…", 'info');
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { text: PROMPT },
+            { inline_data: { mime_type: imageMime, data: imageBase64 } }
+          ]
+        }],
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: 'application/json',
+          responseSchema: SCHEMA
+        }
+      })
+    });
+
+    const json = await res.json();
+    if (!res.ok) {
+      const msg = json?.error?.message || res.statusText;
+      if (res.status === 400 && /API key/i.test(msg)) throw new Error('Chiave API non valida.');
+      if (res.status === 404) throw new Error(`Modello "${model}" non trovato. Controllalo nelle opzioni avanzate.`);
+      if (res.status === 429) throw new Error('Limite di richieste raggiunto. Riprova tra un minuto.');
+      throw new Error(msg);
+    }
+
+    const text = json?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+    if (!text) throw new Error("Nessuna risposta dall'IA. Prova con una foto più nitida.");
+
+    const parsed = JSON.parse(text);
+    rows = (parsed.righe || []).map(r => ({
+      data: r.data || '', nome: r.nome || '', mansione: r.mansione || '',
+      arrivo: normalizeTime(r.arrivo), partenza: normalizeTime(r.partenza),
+      ore: Number(r.ore) || calcHours(r.arrivo, r.partenza)
+    }));
+
+    if (!rows.length) throw new Error('Nessun lavoratore trovato. Inquadra bene tutto il foglio e riprova.');
+
+    renderTable();
+    $('resultSection').classList.remove('hidden');
+    showStatus(`✅ Estratte ${rows.length} righe. Controllale qui sotto prima di creare il PDF.`, 'ok');
+    $('resultSection').scrollIntoView({ behavior: 'smooth' });
+  } catch (err) {
+    showStatus('Errore: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🤖 Estrai dati con IA';
+  }
+}
+$('btnExtract').onclick = extractWithGemini;
+
+/* =========================================================
+   UTILITÀ ORARI
+   ========================================================= */
+// "7.30", "7,30", "730", "7" → "07:30" / "07:00"
+function normalizeTime(t) {
+  if (!t) return '';
+  const s = String(t).trim().replace(/[.,h]/g, ':');
+  let m = s.match(/^(\d{1,2}):(\d{1,2})$/);
+  if (!m && /^\d{3,4}$/.test(s)) m = [null, s.slice(0, -2), s.slice(-2)];
+  if (!m && /^\d{1,2}$/.test(s)) m = [null, s, '0'];
+  if (!m) return String(t);
+  const h = Math.min(23, parseInt(m[1], 10));
+  const min = Math.min(59, parseInt(m[2], 10));
+  return String(h).padStart(2, '0') + ':' + String(min).padStart(2, '0');
+}
+
+// Differenza tra due orari in ore decimali (gestisce il turno a cavallo della mezzanotte)
+function calcHours(a, b) {
+  const ta = normalizeTime(a), tb = normalizeTime(b);
+  const re = /^(\d{2}):(\d{2})$/;
+  if (!re.test(ta) || !re.test(tb)) return 0;
+  const [ha, ma] = ta.split(':').map(Number);
+  const [hb, mb] = tb.split(':').map(Number);
+  let diff = (hb * 60 + mb) - (ha * 60 + ma);
+  if (diff < 0) diff += 24 * 60;
+  return Math.round(diff / 60 * 100) / 100;
+}
+
+// 7.5 → "7,50" (formato italiano)
+const fmtOre = n => (Number(n) || 0).toFixed(2).replace('.', ',');
+// 7.5 → "7h 30m"
+const fmtHM = n => {
+  const tot = Math.round((Number(n) || 0) * 60);
+  return `${Math.floor(tot / 60)}h ${String(tot % 60).padStart(2, '0')}m`;
+};
+const totalHours = () => rows.reduce((s, r) => s + (Number(r.ore) || 0), 0);
+
+/* =========================================================
+   TABELLA MODIFICABILE
+   ========================================================= */
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function renderTable() {
+  const fields = ['data', 'nome', 'mansione', 'arrivo', 'partenza', 'ore'];
+  $('tableBody').innerHTML = rows.map((r, i) => `
+    <tr class="border-b border-slate-100">
+      ${fields.map(f => `
+        <td class="p-1">
+          <input class="cell-input ${f === 'ore' ? 'w-16' : ''}" data-i="${i}" data-f="${f}"
+                 value="${escapeHtml(f === 'ore' ? fmtOre(r.ore) : r[f])}"
+                 ${f === 'ore' ? 'inputmode="decimal"' : ''}>
+        </td>`).join('')}
+      <td class="p-1"><button class="text-red-500 px-2" data-del="${i}">✕</button></td>
+    </tr>`).join('');
+  $('totalCell').textContent = fmtOre(totalHours());
+}
+
+// Modifica di una cella
+$('tableBody').addEventListener('change', e => {
+  const el = e.target;
+  if (!el.dataset.f) return;
+  const r = rows[+el.dataset.i], f = el.dataset.f;
+  if (f === 'ore') {
+    r.ore = parseFloat(el.value.replace(',', '.')) || 0;
+  } else if (f === 'arrivo' || f === 'partenza') {
+    r[f] = normalizeTime(el.value);
+    r.ore = calcHours(r.arrivo, r.partenza); // ricalcolo automatico
+  } else {
+    r[f] = el.value.trim();
+  }
+  renderTable();
+});
+
+// Eliminazione riga
+$('tableBody').addEventListener('click', e => {
+  const i = e.target.dataset.del;
+  if (i === undefined) return;
+  rows.splice(+i, 1);
+  renderTable();
+});
+
+// Aggiunta riga vuota (copia la data della riga precedente)
+$('btnAddRow').onclick = () => {
+  rows.push({ data: rows.at(-1)?.data || '', nome: '', mansione: '', arrivo: '', partenza: '', ore: 0 });
+  renderTable();
+};
+
+/* =========================================================
+   GENERAZIONE PDF (jsPDF + AutoTable)
+   ========================================================= */
+function buildPdf() {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const W = doc.internal.pageSize.getWidth();
+  const H = doc.internal.pageSize.getHeight();
+  const M = 14; // margine
+
+  const cantiere = $('cantiere').value.trim();
+  const impresa  = $('impresa').value.trim();
+  const dates    = [...new Set(rows.map(r => r.data).filter(Boolean))];
+  const periodo  = dates.length === 0 ? '' : dates.length === 1 ? dates[0] : `${dates[0]} – ${dates.at(-1)}`;
+
+  // --- Intestazione ---
+  doc.setFillColor(30, 58, 95);
+  doc.rect(0, 0, W, 26, 'F');
+  doc.setTextColor(255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.text('FOGLIO PRESENZE CANTIERE', M, 12);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  if (impresa) doc.text(impresa, M, 19);
+  doc.text('Generato il ' + new Date().toLocaleDateString('it-IT'), W - M, 19, { align: 'right' });
+
+  // --- Dati cantiere ---
+  doc.setTextColor(40);
+  doc.setFontSize(11);
+  let y = 35;
+  doc.setFont('helvetica', 'bold');   doc.text('Cantiere:', M, y);
+  doc.setFont('helvetica', 'normal'); doc.text(cantiere || '—', M + 22, y);
+  y += 6;
+  doc.setFont('helvetica', 'bold');   doc.text('Periodo:', M, y);
+  doc.setFont('helvetica', 'normal'); doc.text(periodo || '—', M + 22, y);
+  y += 6;
+  doc.setFont('helvetica', 'bold');   doc.text('Lavoratori:', M, y);
+  doc.setFont('helvetica', 'normal'); doc.text(String(new Set(rows.map(r => r.nome.toLowerCase())).size), M + 22, y);
+
+  // --- Tabella ---
+  const tot = totalHours();
+  doc.autoTable({
+    startY: y + 6,
+    margin: { left: M, right: M },
+    head: [['#', 'Data', 'Lavoratore', 'Mansione', 'Arrivo', 'Partenza', 'Ore']],
+    body: rows.map((r, i) => [i + 1, r.data, r.nome, r.mansione, r.arrivo, r.partenza, fmtOre(r.ore)]),
+    foot: [[{ content: 'TOTALE ORE', colSpan: 6, styles: { halign: 'right' } },
+            { content: `${fmtOre(tot)}\n(${fmtHM(tot)})`, styles: { halign: 'center' } }]],
+    theme: 'grid',
+    styles: { font: 'helvetica', fontSize: 9.5, cellPadding: 2.5, lineColor: [200, 205, 215], lineWidth: 0.2 },
+    headStyles: { fillColor: [30, 58, 95], textColor: 255, fontStyle: 'bold', halign: 'center' },
+    footStyles: { fillColor: [230, 236, 245], textColor: [30, 58, 95], fontStyle: 'bold', fontSize: 10.5 },
+    alternateRowStyles: { fillColor: [247, 249, 252] },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      1: { halign: 'center', cellWidth: 24 },
+      4: { halign: 'center', cellWidth: 18 },
+      5: { halign: 'center', cellWidth: 18 },
+      6: { halign: 'center', cellWidth: 20 }
+    },
+    showFoot: 'lastPage'
+  });
+
+  y = doc.lastAutoTable.finalY + 8;
+
+  // --- Note ---
+  const note = $('note').value.trim();
+  if (note) {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
+    doc.text('Note:', M, y);
+    doc.setFont('helvetica', 'normal');
+    const lines = doc.splitTextToSize(note, W - 2 * M);
+    doc.text(lines, M, y + 5);
+    y += 5 + lines.length * 4.5 + 4;
+  }
+
+  // --- Firme (nuova pagina se non c'è spazio) ---
+  if (y > H - 50) { doc.addPage(); y = 30; }
+  const sigY = Math.max(y + 10, H - 45);
+  const colW = (W - 2 * M - 20) / 2;
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Firma Capocantiere', M, sigY);
+  doc.text('Firma Ufficio', M + colW + 20, sigY);
+  doc.setDrawColor(120);
+  doc.setLineWidth(0.3);
+  doc.line(M, sigY + 18, M + colW, sigY + 18);
+  doc.line(M + colW + 20, sigY + 18, W - M, sigY + 18);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(120);
+  doc.text('Data: ____/____/________', M, sigY + 24);
+  doc.text('Data: ____/____/________', M + colW + 20, sigY + 24);
+
+  // --- Piè di pagina con numerazione ---
+  const pages = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= pages; p++) {
+    doc.setPage(p);
+    doc.setFontSize(8);
+    doc.setTextColor(150);
+    doc.text(`Pagina ${p} di ${pages}`, W - M, H - 8, { align: 'right' });
+    doc.text('Dati estratti automaticamente e verificati dal capocantiere', M, H - 8);
+  }
+
+  return doc;
+}
+
+function pdfFileName() {
+  const d = (rows[0]?.data || new Date().toLocaleDateString('it-IT')).replace(/\//g, '-');
+  const c = $('cantiere').value.trim().replace(/[^\w\-]+/g, '_').slice(0, 30);
+  return `Presenze_${c ? c + '_' : ''}${d}.pdf`;
+}
+
+// Download
+$('btnPdf').onclick = () => {
+  if (!rows.length) { alert('Nessun dato da esportare.'); return; }
+  saveSettings();
+  buildPdf().save(pdfFileName());
+};
+
+// Condivisione diretta (WhatsApp, email…) dove il browser la supporta
+(function setupShare() {
+  try {
+    const test = new File([''], 't.pdf', { type: 'application/pdf' });
+    if (navigator.canShare && navigator.canShare({ files: [test] })) {
+      $('btnShare').classList.remove('hidden');
+    }
+  } catch (e) {}
+})();
+
+$('btnShare').onclick = async () => {
+  if (!rows.length) return;
+  const blob = buildPdf().output('blob');
+  const file = new File([blob], pdfFileName(), { type: 'application/pdf' });
+  try {
+    await navigator.share({ files: [file], title: 'Foglio presenze', text: 'Foglio presenze cantiere' });
+  } catch (e) {
+    if (e.name !== 'AbortError') alert('Condivisione non riuscita: usa "Scarica PDF".');
+  }
+};
+</script>
+</body>
+</html>
