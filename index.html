@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1e3a5f">
+  <title>Rapporto Cantiere</title>
+
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- jsPDF + AutoTable (CDN) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+
+  <style>
+    body { -webkit-tap-highlight-color: transparent; }
+    .cell-input { width: 100%; background: transparent; padding: 4px 6px; border-radius: 4px; }
+    .cell-input:focus { outline: 2px solid #3b82f6; background: #fff; }
+    .cell-warn { background: #fef3c7; }
+    .spinner { border: 3px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%;
+               width: 18px; height: 18px; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+
+<body class="bg-slate-100 min-h-screen text-slate-800">
+
+  <!-- ===== INTESTAZIONE ===== -->
+  <header class="bg-[#1e3a5f] text-white px-4 py-4 shadow">
+    <h1 class="text-xl font-bold">📋 Rapporto Cantiere</h1>
+    <p class="text-sm text-blue-100">Foto del rapporto giornaliero → dati estratti con IA → PDF per l'ufficio</p>
+  </header>
+
+  <main class="max-w-2xl mx-auto p-4 space-y-4 pb-24">
+
+    <!-- ===== 1. IMPOSTAZIONI (API KEY + MODELLO) ===== -->
+    <section class="bg-white rounded-xl shadow p-4 space-y-3">
+      <h2 class="font-semibold text-lg">1. Chiave API Gemini</h2>
+      <div class="flex gap-2">
+        <input id="apiKey" type="password" autocomplete="off" placeholder="Incolla qui la tua API Key"
+               class="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+        <button id="toggleKey" class="border border-slate-300 rounded-lg px-3 text-sm">👁</button>
+      </div>
+      <label class="flex items-center gap-2 text-sm text-slate-600">
+        <input id="rememberKey" type="checkbox" class="w-4 h-4" checked>
+        Ricorda la chiave su questo telefono
+      </label>
+      <details class="text-sm">
+        <summary class="cursor-pointer text-slate-500">Opzioni avanzate</summary>
+        <label class="block mt-2 text-slate-600">Modello principale</label>
+        <input id="model" type="text" value="gemini-flash-latest"
+               class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mt-1">
+        <label class="block mt-2 text-slate-600">Modello di riserva (usato se il principale è sovraccarico)</label>
+        <input id="modelFallback" type="text" value="gemini-flash-lite-latest"
+               class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mt-1">
+        <p class="text-xs text-slate-400 mt-1">
+          Se Google risponde "high demand", l'app riprova da sola 3 volte e poi passa al modello di riserva.
+          Lascia vuoto il campo di riserva per disattivarlo.
+        </p>
+      </details>
+      <p class="text-xs text-slate-400">
+        La chiave si crea gratis su <span class="font-medium">aistudio.google.com</span> → "Get API key".
+      </p>
+    </section>
+
+    <!-- ===== 2. FOTO DEL RAPPORTO ===== -->
+    <section class="bg-white rounded-xl shadow p-4 space-y-3">
+      <h2 class="font-semibold text-lg">2. Foto del rapporto giornaliero</h2>
+
+      <!-- capture="environment" apre direttamente la fotocamera posteriore -->
+      <label class="block">
+        <span class="w-full flex items-center justify-center gap-2 bg-[#1e3a5f] text-white rounded-lg py-3 font-medium cursor-pointer active:scale-[.98] transition">
+          📷 Scatta foto
+        </span>
+        <input id="photoCamera" type="file" accept="image/*" capture="environment" class="hidden">
+      </label>
+      <label class="block">
+        <span class="w-full flex items-center justify-center gap-2 border border-[#1e3a5f] text-[#1e3a5f] rounded-lg py-3 font-medium cursor-pointer">
+          🖼 Scegli dalla galleria
+        </span>
+        <input id="photoGallery" type="file" accept="image/*" class="hidden">
+      </label>
+
+      <!-- Anteprima immagine -->
+      <div id="previewBox" class="hidden space-y-2">
+        <img id="preview" alt="Anteprima rapporto" class="w-full rounded-lg border border-slate-200 max-h-96 object-contain bg-slate-50">
+        <button id="btnRotate" class="w-full border border-slate-300 rounded-lg py-2 text-sm text-slate-600">
+          ↻ Ruota foto (se il foglio è di traverso)
+        </button>
+      </div>
+
+      <button id="btnExtract" disabled
+              class="w-full flex items-center justify-center gap-2 bg-emerald-600 disabled:bg-slate-300 text-white rounded-lg py-3 font-semibold">
+        🤖 Estrai dati con IA
+      </button>
+
+      <div id="status" class="text-sm hidden rounded-lg p-3"></div>
+    </section>
+
+    <!-- ===== 3. DATI ESTRATTI (modificabili prima del PDF) ===== -->
+    <section id="resultSection" class="bg-white rounded-xl shadow p-4 space-y-5 hidden">
+      <div>
+        <h2 class="font-semibold text-lg">3. Controlla i dati</h2>
+        <p class="text-xs text-slate-500">
+          La scrittura a mano può trarre in inganno l'IA: confronta con la foto e tocca un campo per correggerlo.
+        </p>
+      </div>
+
+      <!-- Avvisi di controllo -->
+      <div id="warnings" class="hidden rounded-lg p-3 bg-amber-50 text-amber-900 text-sm space-y-1"></div>
+
+      <!-- Intestazione rapporto -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div class="sm:col-span-2">
+          <label class="block text-xs text-slate-500 mb-1">Cantiere</label>
+          <input id="cantiere" type="text" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Data (GG/MM/AAAA)</label>
+          <input id="dataRapporto" type="text" inputmode="numeric" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Impresa</label>
+          <input id="impresa" type="text" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+        <div class="sm:col-span-2">
+          <label class="block text-xs text-slate-500 mb-1">Condizioni meteo</label>
+          <input id="meteo" type="text" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+      </div>
+
+      <!-- Personale presente -->
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <h3 class="font-semibold">👷 Personale presente</h3>
+          <button id="btnAddPers" class="text-sm text-blue-700 font-medium">+ Lavoratore</button>
+        </div>
+        <p class="text-xs text-slate-500">
+          Orari: scrivi i turni separati da "/" (es. <b>07:00-12:00 / 13:00-17:00</b>). Le ore si ricalcolano da sole.
+        </p>
+        <div class="overflow-x-auto -mx-4 px-4">
+          <table class="min-w-[600px] w-full text-sm">
+            <thead>
+              <tr class="bg-slate-100 text-left text-slate-600">
+                <th class="p-2">Lavoratore</th>
+                <th class="p-2">Qualifica</th>
+                <th class="p-2">Orari</th>
+                <th class="p-2">Ore</th>
+                <th class="p-2"></th>
+              </tr>
+            </thead>
+            <tbody id="persBody"></tbody>
+            <tfoot>
+              <tr class="font-bold border-t-2 border-slate-300">
+                <td class="p-2" colspan="3">TOTALE ORE</td>
+                <td class="p-2" id="totalCell">0</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+
+      <!-- Lavori eseguiti -->
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <h3 class="font-semibold">🔧 Lavori eseguiti</h3>
+          <button id="btnAddLav" class="text-sm text-blue-700 font-medium">+ Lavoro</button>
+        </div>
+        <div class="overflow-x-auto -mx-4 px-4">
+          <table class="min-w-[520px] w-full text-sm">
+            <thead>
+              <tr class="bg-slate-100 text-left text-slate-600">
+                <th class="p-2">Descrizione</th>
+                <th class="p-2 w-20">U.M.</th>
+                <th class="p-2 w-24">Quantità</th>
+                <th class="p-2"></th>
+              </tr>
+            </thead>
+            <tbody id="lavBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Materiali -->
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <h3 class="font-semibold">📦 Materiali, mezzi e attrezzi</h3>
+          <button id="btnAddMat" class="text-sm text-blue-700 font-medium">+ Materiale</button>
+        </div>
+        <div class="overflow-x-auto -mx-4 px-4">
+          <table class="min-w-[600px] w-full text-sm">
+            <thead>
+              <tr class="bg-slate-100 text-left text-slate-600">
+                <th class="p-2 w-20">N. bolla</th>
+                <th class="p-2">Descrizione</th>
+                <th class="p-2 w-20">U.M.</th>
+                <th class="p-2 w-24">Quantità</th>
+                <th class="p-2"></th>
+              </tr>
+            </thead>
+            <tbody id="matBody"></tbody>
+          </table>
+        </div>
+        <p id="matEmpty" class="text-xs text-slate-400">Nessun materiale indicato sul foglio.</p>
+      </div>
+
+      <!-- Osservazioni -->
+      <div>
+        <label class="block font-semibold mb-1">📝 Osservazioni</label>
+        <textarea id="note" rows="3" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"></textarea>
+      </div>
+
+      <button id="btnPdf"
+              class="w-full bg-red-600 text-white rounded-lg py-3 font-semibold">
+        📄 Scarica PDF
+      </button>
+      <button id="btnShare"
+              class="w-full border border-red-600 text-red-600 rounded-lg py-3 font-semibold hidden">
+        📤 Condividi PDF (WhatsApp, email…)
+      </button>
+    </section>
+  </main>
+
+<script>
+/* =========================================================
+   STATO DELL'APP
+   ========================================================= */
+let imageDataUrl = null;  // immagine compressa completa (per anteprima e rotazione)
+let imageBase64  = null;  // stessa immagine senza prefisso "data:"
+const imageMime  = 'image/jpeg';
+
+let personale = [];  // {nome, qualifica, turni: "07:00-12:00 / 13:00-13:30", ore}
+let lavori    = [];  // {descrizione, um, quantita}
+let materiali = [];  // {bolla, descrizione, um, quantita}
+
+const $ = id => document.getElementById(id);
+
+/* =========================================================
+   IMPOSTAZIONI SALVATE SUL TELEFONO
+   localStorage può non essere disponibile (es. navigazione
+   privata), quindi ogni accesso è protetto.
+   ========================================================= */
+const KEY_STORAGE = 'presenze_gemini_key';
+try {
+  const saved = localStorage.getItem(KEY_STORAGE);
+  if (saved) $('apiKey').value = saved;
+  const savedImpresa = localStorage.getItem('presenze_impresa');
+  if (savedImpresa) $('impresa').value = savedImpresa;
+  const savedModel = localStorage.getItem('presenze_model');
+  if (savedModel) $('model').value = savedModel;
+  const savedFallback = localStorage.getItem('presenze_model_fallback');
+  if (savedFallback !== null) $('modelFallback').value = savedFallback;
+} catch (e) {}
+
+function saveSettings() {
+  try {
+    if ($('rememberKey').checked) localStorage.setItem(KEY_STORAGE, $('apiKey').value.trim());
+    else localStorage.removeItem(KEY_STORAGE);
+    localStorage.setItem('presenze_impresa', $('impresa').value);
+    localStorage.setItem('presenze_model', $('model').value.trim());
+    localStorage.setItem('presenze_model_fallback', $('modelFallback').value.trim());
+  } catch (e) {}
+}
+
+$('toggleKey').onclick = () => {
+  $('apiKey').type = $('apiKey').type === 'password' ? 'text' : 'password';
+};
+
+/* =========================================================
+   MESSAGGI DI STATO
+   ========================================================= */
+function showStatus(msg, type = 'info') {
+  const el = $('status');
+  const styles = {
+    info:  'bg-blue-50 text-blue-800',
+    ok:    'bg-emerald-50 text-emerald-800',
+    warn:  'bg-amber-50 text-amber-900',
+    error: 'bg-red-50 text-red-800'
+  };
+  el.className = 'text-sm rounded-lg p-3 ' + styles[type];
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+/* =========================================================
+   CARICAMENTO FOTO + COMPRESSIONE + ROTAZIONE
+   Le foto dei telefoni pesano 3-8 MB: le ridimensiono a
+   max 2000 px per lato, così l'invio è rapido ma la
+   scrittura resta leggibile per l'IA.
+   ========================================================= */
+function setImage(dataUrl) {
+  imageDataUrl = dataUrl;
+  imageBase64 = dataUrl.split(',')[1];
+  $('preview').src = dataUrl;
+  $('previewBox').classList.remove('hidden');
+  $('btnExtract').disabled = false;
+}
+
+function handleFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 2000;
+      let { width, height } = img;
+      if (width > MAX || height > MAX) {
+        const scale = MAX / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      setImage(canvas.toDataURL('image/jpeg', 0.88));
+      $('status').classList.add('hidden');
+    };
+    img.onerror = () => showStatus('Formato immagine non supportato. Prova a scattare di nuovo.', 'error');
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+$('photoCamera').onchange  = e => { handleFile(e.target.files[0]); e.target.value = ''; };
+$('photoGallery').onchange = e => { handleFile(e.target.files[0]); e.target.value = ''; };
+
+// Ruota di 90° in senso orario: aiuta l'IA quando il foglio è fotografato di traverso
+$('btnRotate').onclick = () => {
+  if (!imageDataUrl) return;
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.height;
+    canvas.height = img.width;
+    const ctx = canvas.getContext('2d');
+    ctx.translate(canvas.width, 0);
+    ctx.rotate(Math.PI / 2);
+    ctx.drawImage(img, 0, 0);
+    setImage(canvas.toDataURL('image/jpeg', 0.9));
+  };
+  img.src = imageDataUrl;
+};
+
+/* =========================================================
+   PROMPT E SCHEMA PER IL MODULO "RAPPORTO GIORNALIERO"
+   ========================================================= */
+function buildPrompt() {
+  const anno = new Date().getFullYear();
+  return `Sei un assistente che legge RAPPORTI GIORNALIERI DI CANTIERE edile compilati a mano, in italiano.
+Il modulo stampato ha queste sezioni:
+- In alto: nome dell'impresa (scritto a mano, es. "BST"), "CANTIERE" (nome/luogo, può stare su più righe: uniscile), "RAPPORTO del" (data), "CONDIZIONI METEOROLOGICHE".
+- "PERSONALE PRESENTE": colonne qualifica, n., ore. Spesso sono scritti solo i nomi uno sotto l'altro.
+- "LAVORI ESEGUITI": colonne descrizione, unità di misura, quantità, ore per operai specializzati/qualificati/manovali.
+- "MATERIALI, MEZZI D'OPERA E ATTREZZI": n. bolla, descrizione, unità di misura, quantità, provenienza, a mezzo.
+- "osservazioni" in fondo.
+ATTENZIONE: la foto è spesso ruotata di 90°: leggi il foglio nel suo verso corretto.
+
+Regole di lettura:
+1. ORARI: spesso è scritta UNA sola riga di orari accanto all'elenco dei nomi (es. "07:00-12:00 / 13:00-13:30"). In quel caso quell'orario vale per TUTTI i lavoratori elencati: ripetilo per ognuno e imposta orario_comune = true.
+2. TURNI: "/" separa turni diversi (mattina / pomeriggio). La pausa tra un turno e l'altro NON è lavorata. Restituisci ogni turno con inizio e fine in formato HH:MM 24h. Rileggi con cura le cifre: distingui bene 1, 3, 7 e 17, 13. Un turno pomeridiano corto (es. 13:00-13:30) è possibile: non "correggerlo".
+3. ORE SCRITTE: se nella colonna "ore" è scritto un numero per il lavoratore mettilo in ore_scritte, altrimenti 0. Non calcolare tu le ore.
+4. DATA: formato GG/MM/AAAA. Se manca l'anno usa ${anno}.
+5. LAVORI ESEGUITI: una voce per ogni riga (spesso iniziano con un trattino o un punto). Le virgolette (") o "idem" significano "come la riga sopra": sostituiscile con le parole ripetute della riga precedente. Esempio: riga 1 "Chiusura finestra S3", riga 2 '" passo uomo S3' → "Chiusura passo uomo S3". Correggi solo le abbreviazioni ovvie (es. "int." resta "int."), mantieni sigle e codici (S3, P2...).
+6. METEO: trascrivi come scritto, es. "Sole (dalle 10 pioggia)".
+7. Se un dato è illeggibile o assente lascia la stringa vuota (o lista vuota). NON inventare nulla. Ignora firme, timbri e scarabocchi.`;
+}
+
+const SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    impresa:  { type: 'STRING' },
+    cantiere: { type: 'STRING' },
+    data:     { type: 'STRING' },
+    meteo:    { type: 'STRING' },
+    orario_comune: { type: 'BOOLEAN' },
+    personale: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          nome:      { type: 'STRING' },
+          qualifica: { type: 'STRING' },
+          turni: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: { inizio: { type: 'STRING' }, fine: { type: 'STRING' } },
+              required: ['inizio', 'fine']
+            }
+          },
+          ore_scritte: { type: 'NUMBER' }
+        },
+        required: ['nome', 'qualifica', 'turni', 'ore_scritte']
+      }
+    },
+    lavori: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          descrizione: { type: 'STRING' },
+          um:          { type: 'STRING' },
+          quantita:    { type: 'STRING' }
+        },
+        required: ['descrizione', 'um', 'quantita']
+      }
+    },
+    materiali: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          bolla:       { type: 'STRING' },
+          descrizione: { type: 'STRING' },
+          um:          { type: 'STRING' },
+          quantita:    { type: 'STRING' }
+        },
+        required: ['bolla', 'descrizione', 'um', 'quantita']
+      }
+    },
+    osservazioni: { type: 'STRING' }
+  },
+  required: ['impresa', 'cantiere', 'data', 'meteo', 'orario_comune', 'personale', 'lavori', 'materiali', 'osservazioni']
+};
+
+/* =========================================================
+   CHIAMATA A GEMINI CON RIPROVA AUTOMATICA
+   503 = "high demand" (server sovraccarico), 429 = troppe
+   richieste, 500 = errore temporaneo di Google.
+   Per questi errori riprovo 3 volte (attesa 2s, 4s, 8s),
+   poi passo al modello di riserva.
+   ========================================================= */
+const RETRYABLE = [429, 500, 503];
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function callGeminiOnce(model, apiKey, body) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify(body)
+  });
+  let json = {};
+  try { json = await res.json(); } catch (e) {}
+  return { res, json };
+}
+
+async function callGemini(apiKey, body) {
+  const primary  = $('model').value.trim() || 'gemini-flash-latest';
+  const fallback = $('modelFallback').value.trim();
+  const models = [...new Set([primary, fallback].filter(Boolean))];
+  const ATTEMPTS = 3;
+  let lastError = null;
+
+  for (let mi = 0; mi < models.length; mi++) {
+    const model = models[mi];
+    for (let a = 1; a <= ATTEMPTS; a++) {
+      if (mi > 0 || a > 1) {
+        showStatus(`Server IA occupato: tentativo ${a}/${ATTEMPTS}${mi > 0 ? ' con il modello di riserva' : ''}…`, 'warn');
+      }
+      let res, json;
+      try {
+        ({ res, json } = await callGeminiOnce(model, apiKey, body));
+      } catch (netErr) {
+        // Nessuna connessione o rete instabile: vale la pena riprovare
+        lastError = new Error('Connessione assente o instabile. Controlla la rete e riprova.');
+        if (a < ATTEMPTS) { await sleep(2000 * 2 ** (a - 1)); continue; }
+        break;
+      }
+
+      if (res.ok) return json;
+
+      const msg = json?.error?.message || res.statusText;
+      if (res.status === 400 && /API key/i.test(msg)) throw new Error('Chiave API non valida.');
+      if (res.status === 403) throw new Error('Chiave API senza permessi per Gemini. Controllala su aistudio.google.com.');
+      if (res.status === 404) {
+        lastError = new Error(`Modello "${model}" non trovato. Controllalo nelle opzioni avanzate.`);
+        break; // inutile riprovare lo stesso modello: passo al successivo
+      }
+      if (RETRYABLE.includes(res.status)) {
+        lastError = new Error(res.status === 429
+          ? 'Limite di richieste della chiave gratuita raggiunto. Riprova tra qualche minuto.'
+          : 'Il servizio IA di Google è momentaneamente sovraccarico. Riprova tra qualche minuto.');
+        if (a < ATTEMPTS) await sleep(2000 * 2 ** (a - 1));
+        continue;
+      }
+      throw new Error(msg); // altri errori: inutile riprovare
+    }
+  }
+  throw lastError || new Error('Errore sconosciuto del servizio IA.');
+}
+
+/* =========================================================
+   ESTRAZIONE
+   ========================================================= */
+async function extractWithGemini() {
+  const apiKey = $('apiKey').value.trim();
+  if (!apiKey) { showStatus('Inserisci prima la chiave API di Gemini.', 'error'); return; }
+  if (!imageBase64) { showStatus('Scatta o carica prima una foto.', 'error'); return; }
+  saveSettings();
+
+  const btn = $('btnExtract');
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner"></div> Lettura in corso…';
+  showStatus("L'IA sta leggendo il rapporto, di solito servono 10-30 secondi…", 'info');
+
+  try {
+    const json = await callGemini(apiKey, {
+      contents: [{
+        parts: [
+          { text: buildPrompt() },
+          { inline_data: { mime_type: imageMime, data: imageBase64 } }
+        ]
+      }],
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: 'application/json',
+        responseSchema: SCHEMA
+      }
+    });
+
+    const text = json?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+    if (!text) throw new Error("Nessuna risposta dall'IA. Prova con una foto più nitida.");
+
+    let parsed;
+    try { parsed = JSON.parse(text); }
+    catch (e) { throw new Error("Risposta dell'IA non leggibile. Riprova."); }
+
+    applyExtraction(parsed);
+
+    if (!personale.length && !lavori.length) {
+      throw new Error('Nessun dato trovato. Inquadra bene tutto il foglio e riprova.');
+    }
+
+    renderAll();
+    $('resultSection').classList.remove('hidden');
+    showStatus(`✅ Estratti ${personale.length} lavoratori e ${lavori.length} lavori. Controllali qui sotto prima di creare il PDF.`, 'ok');
+    $('resultSection').scrollIntoView({ behavior: 'smooth' });
+  } catch (err) {
+    showStatus('Errore: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🤖 Estrai dati con IA';
+  }
+}
+$('btnExtract').onclick = extractWithGemini;
+
+// Converte la risposta dell'IA nello stato dell'app.
+// Le ORE le calcola sempre il codice dai turni, non l'IA.
+function applyExtraction(p) {
+  if (p.cantiere) $('cantiere').value = p.cantiere.trim();
+  if (p.data)     $('dataRapporto').value = normalizeDate(p.data);
+  $('meteo').value = (p.meteo || '').trim();
+  if (p.impresa && !$('impresa').value.trim()) $('impresa').value = p.impresa.trim();
+  $('note').value = (p.osservazioni || '').trim();
+
+  personale = (p.personale || [])
+    .filter(x => (x.nome || '').trim())
+    .map(x => {
+      const turni = (x.turni || [])
+        .map(t => ({ inizio: normalizeTime(t.inizio), fine: normalizeTime(t.fine) }))
+        .filter(t => t.inizio && t.fine);
+      const turniStr = turniToString(turni);
+      const oreCalc = hoursFromTurni(turniStr);
+      return {
+        nome: x.nome.trim(),
+        qualifica: (x.qualifica || '').trim(),
+        turni: turniStr,
+        ore: oreCalc > 0 ? oreCalc : (Number(x.ore_scritte) || 0)
+      };
+    });
+
+  lavori = (p.lavori || [])
+    .filter(x => (x.descrizione || '').trim())
+    .map(x => ({ descrizione: x.descrizione.trim(), um: (x.um || '').trim(), quantita: (x.quantita || '').trim() }));
+
+  materiali = (p.materiali || [])
+    .filter(x => (x.descrizione || '').trim())
+    .map(x => ({ bolla: (x.bolla || '').trim(), descrizione: x.descrizione.trim(), um: (x.um || '').trim(), quantita: (x.quantita || '').trim() }));
+}
+
+/* =========================================================
+   UTILITÀ ORARI E DATE
+   ========================================================= */
+// "7.30", "7,30", "730", "7" → "07:30" / "07:00"
+function normalizeTime(t) {
+  if (!t) return '';
+  const s = String(t).trim().replace(/[.,h]/g, ':');
+  let m = s.match(/^(\d{1,2}):(\d{1,2})$/);
+  if (!m && /^\d{3,4}$/.test(s)) m = [null, s.slice(0, -2), s.slice(-2)];
+  if (!m && /^\d{1,2}$/.test(s)) m = [null, s, '0'];
+  if (!m) return '';
+  const h = Math.min(23, parseInt(m[1], 10));
+  const min = Math.min(59, parseInt(m[2], 10));
+  return String(h).padStart(2, '0') + ':' + String(min).padStart(2, '0');
+}
+
+// Differenza tra due orari in minuti (gestisce il turno a cavallo della mezzanotte)
+function diffMinutes(a, b) {
+  const ta = normalizeTime(a), tb = normalizeTime(b);
+  if (!ta || !tb) return 0;
+  const [ha, ma] = ta.split(':').map(Number);
+  const [hb, mb] = tb.split(':').map(Number);
+  let d = (hb * 60 + mb) - (ha * 60 + ma);
+  if (d < 0) d += 24 * 60;
+  return d;
+}
+
+const turniToString = turni => turni.map(t => `${t.inizio}-${t.fine}`).join(' / ');
+
+// "07:00-12:00 / 13:00-13:30" → [{inizio:"07:00", fine:"12:00"}, {inizio:"13:00", fine:"13:30"}]
+// Accetta anche "7-12/13-13.30", "07:00 · 12:00", "7 a 12"
+function parseTurni(str) {
+  return String(str || '')
+    .split(/[\/;|]|\s+e\s+/i)
+    .map(seg => {
+      const parts = seg.trim().split(/\s*(?:-|–|—|·|\ba\b|\s)\s*/i).filter(Boolean);
+      if (parts.length < 2) return null;
+      const inizio = normalizeTime(parts[0]), fine = normalizeTime(parts[parts.length - 1]);
+      return inizio && fine ? { inizio, fine } : null;
+    })
+    .filter(Boolean);
+}
+
+const hoursFromTurni = str =>
+  Math.round(parseTurni(str).reduce((s, t) => s + diffMinutes(t.inizio, t.fine), 0) / 60 * 100) / 100;
+
+// "10/10/26", "10-10-2026", "10.10" → "10/10/2026"
+function normalizeDate(d) {
+  const m = String(d || '').trim().match(/^(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?$/);
+  if (!m) return String(d || '').trim();
+  let y = m[3] ? parseInt(m[3], 10) : new Date().getFullYear();
+  if (y < 100) y += 2000;
+  return `${m[1].padStart(2, '0')}/${m[2].padStart(2, '0')}/${y}`;
+}
+
+function parseDate(d) {
+  const m = String(d || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return null;
+  const dt = new Date(+m[3], +m[2] - 1, +m[1]);
+  return dt.getMonth() === +m[2] - 1 ? dt : null; // scarta date impossibili tipo 31/02
+}
+
+// 7.5 → "7,50" (formato italiano)
+const fmtOre = n => (Number(n) || 0).toFixed(2).replace('.', ',');
+// 7.5 → "7h 30m"
+const fmtHM = n => {
+  const tot = Math.round((Number(n) || 0) * 60);
+  return `${Math.floor(tot / 60)}h ${String(tot % 60).padStart(2, '0')}m`;
+};
+const totalHours = () => personale.reduce((s, r) => s + (Number(r.ore) || 0), 0);
+
+/* =========================================================
+   CONTROLLI DI PLAUSIBILITÀ
+   ========================================================= */
+const MAX_ORE_GIORNO = 10;
+
+function checkWarnings() {
+  const w = [];
+  const dataStr = $('dataRapporto').value.trim();
+  const dt = parseDate(dataStr);
+  const oggi = new Date(); oggi.setHours(23, 59, 59, 999);
+
+  if (!dataStr) w.push('Manca la data del rapporto.');
+  else if (!dt) w.push(`La data "${dataStr}" non è valida (usa GG/MM/AAAA).`);
+  else if (dt > oggi) w.push(`La data ${dataStr} è nel futuro: probabilmente l'IA ha letto male una cifra.`);
+
+  if (!$('cantiere').value.trim()) w.push('Manca il nome del cantiere.');
+
+  personale.forEach(p => {
+    if (!p.ore) w.push(`${p.nome || 'Lavoratore senza nome'}: ore non indicate.`);
+    else if (p.ore > MAX_ORE_GIORNO) w.push(`${p.nome}: ${fmtOre(p.ore)} ore in un giorno, controlla gli orari.`);
+    if (p.turni && !parseTurni(p.turni).length) w.push(`${p.nome}: orari "${p.turni}" non riconosciuti.`);
+  });
+
+  if (!lavori.length) w.push('Nessun lavoro eseguito indicato.');
+
+  const box = $('warnings');
+  if (w.length) {
+    box.innerHTML = '<p class="font-semibold">⚠️ Da controllare:</p>' + w.map(x => `<p>• ${escapeHtml(x)}</p>`).join('');
+    box.classList.remove('hidden');
+  } else {
+    box.classList.add('hidden');
+  }
+  return w;
+}
+['dataRapporto', 'cantiere'].forEach(id => $(id).addEventListener('change', () => {
+  if (id === 'dataRapporto') $(id).value = normalizeDate($(id).value);
+  checkWarnings();
+}));
+
+/* =========================================================
+   TABELLE MODIFICABILI
+   ========================================================= */
+function cell(list, i, f, value, extra = '') {
+  return `<td class="p-1"><input class="cell-input" data-list="${list}" data-i="${i}" data-f="${f}"
+          value="${escapeHtml(value)}" ${extra}></td>`;
+}
+const delBtn = (list, i) => `<td class="p-1"><button class="text-red-500 px-2" data-list="${list}" data-del="${i}">✕</button></td>`;
+
+function renderPersonale() {
+  $('persBody').innerHTML = personale.map((r, i) => `
+    <tr class="border-b border-slate-100 ${r.ore > MAX_ORE_GIORNO || !r.ore ? 'cell-warn' : ''}">
+      ${cell('personale', i, 'nome', r.nome)}
+      ${cell('personale', i, 'qualifica', r.qualifica)}
+      ${cell('personale', i, 'turni', r.turni, 'placeholder="07:00-12:00 / 13:00-17:00"')}
+      ${cell('personale', i, 'ore', fmtOre(r.ore), 'inputmode="decimal" style="width:4.5rem"')}
+      ${delBtn('personale', i)}
+    </tr>`).join('');
+  $('totalCell').textContent = fmtOre(totalHours());
+}
+
+function renderLavori() {
+  $('lavBody').innerHTML = lavori.map((r, i) => `
+    <tr class="border-b border-slate-100">
+      ${cell('lavori', i, 'descrizione', r.descrizione)}
+      ${cell('lavori', i, 'um', r.um)}
+      ${cell('lavori', i, 'quantita', r.quantita, 'inputmode="decimal"')}
+      ${delBtn('lavori', i)}
+    </tr>`).join('');
+}
+
+function renderMateriali() {
+  $('matBody').innerHTML = materiali.map((r, i) => `
+    <tr class="border-b border-slate-100">
+      ${cell('materiali', i, 'bolla', r.bolla)}
+      ${cell('materiali', i, 'descrizione', r.descrizione)}
+      ${cell('materiali', i, 'um', r.um)}
+      ${cell('materiali', i, 'quantita', r.quantita, 'inputmode="decimal"')}
+      ${delBtn('materiali', i)}
+    </tr>`).join('');
+  $('matEmpty').classList.toggle('hidden', materiali.length > 0);
+}
+
+function renderAll() {
+  renderPersonale();
+  renderLavori();
+  renderMateriali();
+  checkWarnings();
+}
+
+const LISTS = { personale: () => personale, lavori: () => lavori, materiali: () => materiali };
+
+// Modifica di una cella (qualsiasi tabella)
+document.addEventListener('change', e => {
+  const el = e.target;
+  if (!el.dataset.list || !el.dataset.f) return;
+  const r = LISTS[el.dataset.list]()[+el.dataset.i];
+  const f = el.dataset.f;
+  if (f === 'ore') {
+    r.ore = parseFloat(el.value.replace(',', '.')) || 0;
+  } else if (f === 'turni') {
+    const turni = parseTurni(el.value);
+    r.turni = turni.length ? turniToString(turni) : el.value.trim();
+    r.ore = hoursFromTurni(r.turni); // ricalcolo automatico
+  } else {
+    r[f] = el.value.trim();
+  }
+  renderAll();
+});
+
+// Eliminazione riga
+document.addEventListener('click', e => {
+  const el = e.target;
+  if (el.dataset.del === undefined || !el.dataset.list) return;
+  LISTS[el.dataset.list]().splice(+el.dataset.del, 1);
+  renderAll();
+});
+
+// Aggiunta righe (il nuovo lavoratore copia gli orari dell'ultimo)
+$('btnAddPers').onclick = () => {
+  const last = personale.at(-1);
+  personale.push({ nome: '', qualifica: '', turni: last?.turni || '', ore: last?.ore || 0 });
+  renderAll();
+};
+$('btnAddLav').onclick = () => { lavori.push({ descrizione: '', um: '', quantita: '' }); renderAll(); };
+$('btnAddMat').onclick = () => { materiali.push({ bolla: '', descrizione: '', um: '', quantita: '' }); renderAll(); };
+
+/* =========================================================
+   GENERAZIONE PDF (jsPDF + AutoTable)
+   ========================================================= */
+const NAVY = [30, 58, 95];
+
+function buildPdf() {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const W = doc.internal.pageSize.getWidth();
+  const H = doc.internal.pageSize.getHeight();
+  const M = 14; // margine
+
+  const cantiere = $('cantiere').value.trim();
+  const impresa  = $('impresa').value.trim();
+  const data     = $('dataRapporto').value.trim();
+  const meteo    = $('meteo').value.trim();
+
+  const tableStyles = {
+    theme: 'grid',
+    margin: { left: M, right: M },
+    styles: { font: 'helvetica', fontSize: 9.5, cellPadding: 2.5, lineColor: [200, 205, 215], lineWidth: 0.2 },
+    headStyles: { fillColor: NAVY, textColor: 255, fontStyle: 'bold', halign: 'center' },
+    alternateRowStyles: { fillColor: [247, 249, 252] }
+  };
+
+  // Titolo di sezione con salto pagina se necessario
+  function sectionTitle(text, y) {
+    if (y > H - 40) { doc.addPage(); y = 20; }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(...NAVY);
+    doc.text(text, M, y);
+    doc.setDrawColor(...NAVY);
+    doc.setLineWidth(0.4);
+    doc.line(M, y + 1.5, W - M, y + 1.5);
+    doc.setTextColor(40);
+    return y + 4;
+  }
+
+  // --- Intestazione ---
+  doc.setFillColor(...NAVY);
+  doc.rect(0, 0, W, 26, 'F');
+  doc.setTextColor(255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(17);
+  doc.text('RAPPORTO GIORNALIERO DI CANTIERE', M, 12);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  if (impresa) doc.text(impresa, M, 19);
+  doc.text('Generato il ' + new Date().toLocaleDateString('it-IT'), W - M, 19, { align: 'right' });
+
+  // --- Dati generali ---
+  doc.autoTable({
+    ...tableStyles,
+    startY: 32,
+    theme: 'plain',
+    styles: { font: 'helvetica', fontSize: 10.5, cellPadding: 1.5 },
+    columnStyles: { 0: { fontStyle: 'bold', cellWidth: 32 } },
+    body: [
+      ['Cantiere:', cantiere || '—'],
+      ['Data:', data || '—'],
+      ['Meteo:', meteo || '—'],
+      ['Lavoratori:', String(personale.length)]
+    ]
+  });
+  let y = doc.lastAutoTable.finalY + 6;
+
+  // --- Personale presente ---
+  y = sectionTitle('PERSONALE PRESENTE', y);
+  const tot = totalHours();
+  doc.autoTable({
+    ...tableStyles,
+    startY: y,
+    head: [['#', 'Lavoratore', 'Qualifica', 'Orari', 'Ore']],
+    body: personale.map((r, i) => [i + 1, r.nome, r.qualifica, r.turni, fmtOre(r.ore)]),
+    foot: [[{ content: 'TOTALE ORE', colSpan: 4, styles: { halign: 'right' } },
+            { content: `${fmtOre(tot)}\n(${fmtHM(tot)})`, styles: { halign: 'center' } }]],
+    footStyles: { fillColor: [230, 236, 245], textColor: NAVY, fontStyle: 'bold', fontSize: 10.5 },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      3: { halign: 'center', cellWidth: 52 },
+      4: { halign: 'center', cellWidth: 22 }
+    },
+    showFoot: 'lastPage'
+  });
+  y = doc.lastAutoTable.finalY + 8;
+
+  // --- Lavori eseguiti ---
+  y = sectionTitle('LAVORI ESEGUITI', y);
+  const hasQtyLav = lavori.some(r => r.um || r.quantita);
+  doc.autoTable({
+    ...tableStyles,
+    startY: y,
+    head: [hasQtyLav ? ['#', 'Descrizione', 'U.M.', 'Quantità'] : ['#', 'Descrizione']],
+    body: lavori.length
+      ? lavori.map((r, i) => hasQtyLav ? [i + 1, r.descrizione, r.um, r.quantita] : [i + 1, r.descrizione])
+      : [['', 'Nessun lavoro indicato']],
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      2: { halign: 'center', cellWidth: 18 },
+      3: { halign: 'center', cellWidth: 22 }
+    }
+  });
+  y = doc.lastAutoTable.finalY + 8;
+
+  // --- Materiali (solo se presenti) ---
+  if (materiali.length) {
+    y = sectionTitle("MATERIALI, MEZZI D'OPERA E ATTREZZI", y);
+    doc.autoTable({
+      ...tableStyles,
+      startY: y,
+      head: [['N. bolla', 'Descrizione', 'U.M.', 'Quantità']],
+      body: materiali.map(r => [r.bolla, r.descrizione, r.um, r.quantita]),
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 22 },
+        2: { halign: 'center', cellWidth: 18 },
+        3: { halign: 'center', cellWidth: 22 }
+      }
+    });
+    y = doc.lastAutoTable.finalY + 8;
+  }
+
+  // --- Osservazioni ---
+  const note = $('note').value.trim();
+  if (note) {
+    y = sectionTitle('OSSERVAZIONI', y);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    const lines = doc.splitTextToSize(note, W - 2 * M);
+    doc.text(lines, M, y + 4);
+    y += 4 + lines.length * 4.5 + 4;
+  }
+
+  // --- Firme (nuova pagina se non c'è spazio) ---
+  if (y > H - 50) { doc.addPage(); y = 30; }
+  const sigY = Math.max(y + 10, H - 45);
+  const colW = (W - 2 * M - 20) / 2;
+  doc.setTextColor(40);
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Firma Capocantiere', M, sigY);
+  doc.text('Firma Ufficio', M + colW + 20, sigY);
+  doc.setDrawColor(120);
+  doc.setLineWidth(0.3);
+  doc.line(M, sigY + 18, M + colW, sigY + 18);
+  doc.line(M + colW + 20, sigY + 18, W - M, sigY + 18);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(120);
+  doc.text('Data: ____/____/________', M, sigY + 24);
+  doc.text('Data: ____/____/________', M + colW + 20, sigY + 24);
+
+  // --- Piè di pagina con numerazione ---
+  const pages = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= pages; p++) {
+    doc.setPage(p);
+    doc.setFontSize(8);
+    doc.setTextColor(150);
+    doc.text(`Pagina ${p} di ${pages}`, W - M, H - 8, { align: 'right' });
+    doc.text('Dati estratti dal rapporto manuale e verificati prima dell\'invio', M, H - 8);
+  }
+
+  return doc;
+}
+
+function pdfFileName() {
+  const d = ($('dataRapporto').value.trim() || new Date().toLocaleDateString('it-IT')).replace(/\//g, '-');
+  const c = $('cantiere').value.trim().replace(/[^\w\-]+/g, '_').slice(0, 30);
+  return `Rapporto_${c ? c + '_' : ''}${d}.pdf`;
+}
+
+// Prima di esportare chiedo conferma se ci sono avvisi aperti
+function readyToExport() {
+  if (!personale.length && !lavori.length) { alert('Nessun dato da esportare.'); return false; }
+  const w = checkWarnings();
+  if (w.length && !confirm('Ci sono ' + w.length + ' avvisi da controllare:\n\n• ' + w.join('\n• ') + '\n\nCreare il PDF lo stesso?')) return false;
+  saveSettings();
+  return true;
+}
+
+// Download
+$('btnPdf').onclick = () => {
+  if (!readyToExport()) return;
+  buildPdf().save(pdfFileName());
+};
+
+// Condivisione diretta (WhatsApp, email…) dove il browser la supporta
+(function setupShare() {
+  try {
+    const test = new File([''], 't.pdf', { type: 'application/pdf' });
+    if (navigator.canShare && navigator.canShare({ files: [test] })) {
+      $('btnShare').classList.remove('hidden');
+    }
+  } catch (e) {}
+})();
+
+$('btnShare').onclick = async () => {
+  if (!readyToExport()) return;
+  const blob = buildPdf().output('blob');
+  const file = new File([blob], pdfFileName(), { type: 'application/pdf' });
+  try {
+    await navigator.share({ files: [file], title: 'Rapporto cantiere', text: 'Rapporto giornaliero di cantiere' });
+  } catch (e) {
+    if (e.name !== 'AbortError') alert('Condivisione non riuscita: usa "Scarica PDF".');
+  }
+};
+</script>
+</body>
+</html>
